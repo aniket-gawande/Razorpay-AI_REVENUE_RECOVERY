@@ -1,0 +1,38 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model PaymentFailure {
+  id              String   @id @default(uuid())
+  paymentId       String   @unique
+  orderId         String?
+  customerEmail   String?
+  customerContact String?
+  amountInRupees  Float
+  failureReason   String
+  status          String   @default("FAILED")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  recoverySessions RecoverySession[]
+}
+
+model RecoverySession {
+  id                    String         @id @default(uuid())
+  paymentFailureId      String
+  paymentFailure        PaymentFailure @relation(fields: [paymentFailureId], references: [id], onDelete: Cascade)
+  customerMessage       String
+  nextAction            String
+  discountBps           Int            @default(0)
+  promiseDate           String?
+  customerFacingMessage String
+  internalReasoning     String
+  status                String         @default("OPEN")
+  createdAt             DateTime       @default(now())
+  updatedAt             DateTime       @updatedAt
+}
