@@ -2,6 +2,7 @@ import { StateGraph, START, END } from '@langchain/langgraph';
 import { ChatOllama } from '@langchain/ollama';
 import { ChatOpenAI } from '@langchain/openai';
 import { AgentDecisionSchema, type AgentDecision } from './schemas';
+import { enforcePolicyGuard } from '../policyGuard';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -53,6 +54,7 @@ OPERATIONAL CONSTRAINTS:
 Respond ONLY with a valid JSON object matching this schema.`;
 
 async function reasoningNode(state: AgentState): Promise<Partial<AgentState>> {
+  let parsed: any;
   try {
     const prompt = `${SYSTEM_PROMPT}
 
@@ -67,42 +69,41 @@ Return JSON:`;
     const response = await model.invoke(prompt);
     const content = typeof response.content === 'string' ? response.content : JSON.stringify(response.content);
 
-    // Extract JSON block even if model includes markdown formatting
+    // Safe JSON extraction using regex
     const jsonMatch = content.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
-      throw new Error('No JSON found in model response');
+      throw new Error('No JSON structure detected in LLM response');
     }
 
-    const parsed = JSON.parse(jsonMatch[0]);
+    parsed = JSON.parse(jsonMatch[0]);
     const validated = AgentDecisionSchema.parse(parsed);
 
     return { decision: validated, validationError: null };
   } catch (err: any) {
-    return { validationError: err.message };
+    console.warn('[RecoveryAgent Warning] LLM invocation or parsing failed:', err.message || err);
+    parsed = {
+      nextAction: 'SEND_LINK',
+      discountBps: 0,
+      promiseDate: null,
+      customerFacingMessage: 'Here is your secure link to complete the payment.',
+      internalReasoning: `Fallback triggered due to LLM/Parsing issue: ${err.message || 'Unknown error'}`
+    };
+    return { decision: parsed, validationError: err.message || 'LLM parsing failed' };
   }
 }
 
 // Deterministic Policy Guard (Red-team defense)
 function deterministicPolicyGuard(state: AgentState): Partial<AgentState> {
-  if (!state.decision) {
-    return {
-      decision: {
-        nextAction: 'SEND_LINK',
-        discountBps: 0,
-        promiseDate: null,
-        customerFacingMessage: 'Here is your secure Razorpay link to complete the payment.',
-        internalReasoning: 'Fallback link dispatched due to parsing exception.'
-      }
-    };
-  }
+  const currentDecision = state.decision || {
+    nextAction: 'SEND_LINK',
+    discountBps: 0,
+    promiseDate: null,
+    customerFacingMessage: 'Here is your secure Razorpay link to complete the payment.',
+    internalReasoning: 'Fallback link dispatched due to missing decision state.'
+  };
 
-  // Hard clamp discounts to maximum 500 bps (5%)
-  if (state.decision.discountBps > 500) {
-    state.decision.discountBps = 500;
-    state.decision.internalReasoning += ' [GUARDRAIL APPLIED: Discount clamped to maximum 500 bps]';
-  }
-
-  return { decision: state.decision };
+  const guardedDecision = enforcePolicyGuard(currentDecision);
+  return { decision: guardedDecision };
 }
 
 const workflow = new StateGraph<AgentState>({

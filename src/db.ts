@@ -1,5 +1,4 @@
 import { PrismaPg } from '@prisma/adapter-pg';
-import pg from 'pg';
 import { PrismaClient } from '../generated/prisma/client';
 import dotenv from 'dotenv';
 
@@ -27,7 +26,5 @@ function getDirectPostgresUrl(url: string | undefined): string {
 const connectionString = getDirectPostgresUrl(process.env.DATABASE_URL);
 console.log(`[DB] Connecting to PostgreSQL at: ${connectionString.replace(/:[^:@]+@/, ':****@')}`);
 
-const pool = new pg.Pool({ connectionString });
-const adapter = new PrismaPg(pool);
-
+const adapter = new PrismaPg({ connectionString });
 export const prisma = new (PrismaClient as any)({ adapter });

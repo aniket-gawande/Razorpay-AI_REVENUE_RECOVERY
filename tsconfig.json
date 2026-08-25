@@ -3,6 +3,7 @@
     "module": "esnext",
     "moduleResolution": "bundler",
     "target": "esnext",
+    "outDir": "./dist",
     "sourceMap": true,
     "strict": true,
     "verbatimModuleSyntax": false,
