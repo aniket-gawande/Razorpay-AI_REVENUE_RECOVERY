@@ -3,6 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import webhookRouter from './routes/webhook';
 import recoveryRouter from './routes/recovery';
+import benchmarkRouter from './routes/benchmark';
 dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -11,6 +12,7 @@ app.use(express.json());
 // Routes
 app.use('/api/webhooks', webhookRouter);
 app.use('/api/recovery', recoveryRouter);
+app.use('/api/benchmark', benchmarkRouter);
 app.get('/health', (req, res) => {
     res.json({ status: 'ok', service: 'razorpay-dunningcore' });
 });

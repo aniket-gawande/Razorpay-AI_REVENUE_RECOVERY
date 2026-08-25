@@ -8,5 +8,7 @@
     "strict": true,
     "verbatimModuleSyntax": false,
     "skipLibCheck": true
-  }
+  },
+  "include": ["src/**/*"],
+  "exclude": ["frontend", "node_modules", "dist"]
 }

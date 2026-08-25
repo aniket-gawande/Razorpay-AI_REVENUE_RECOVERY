@@ -76,6 +76,18 @@ Return JSON:`;
     }
 
     parsed = JSON.parse(jsonMatch[0]);
+
+    // Field normalization for local LLM output variations
+    if (Array.isArray(parsed.internalReasoning)) {
+      parsed.internalReasoning = parsed.internalReasoning.join(' ');
+    } else if (typeof parsed.internalReasoning !== 'string') {
+      parsed.internalReasoning = String(parsed.internalReasoning || '');
+    }
+
+    if (typeof parsed.discountBps === 'string') {
+      parsed.discountBps = parseInt(parsed.discountBps, 10) || 0;
+    }
+
     const validated = AgentDecisionSchema.parse(parsed);
 
     return { decision: validated, validationError: null };

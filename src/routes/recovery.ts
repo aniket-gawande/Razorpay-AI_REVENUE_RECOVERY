@@ -1,126 +1,81 @@
-import { Router } from 'express';
-import type { Request, Response } from 'express';
-import { recoveryAgentApp } from '../services/agent/recoveryAgent';
-import { enforcePolicyGuard } from '../services/policyGuard';
-import { calculateUnitEconomics } from '../services/unitEconomics';
-import { createPaymentLink } from '../services/razorpay';
+import { Router, Request, Response } from 'express';
 import { prisma } from '../db';
+import { recoveryAgentApp } from '../services/agent/recoveryAgent';
+import { createTrackedPaymentLink } from '../services/razorpay';
 
 const router = Router();
 
-// POST /api/recovery/chat - Chat with Recovery Agent for customer messages
-router.post('/chat', async (req: Request, res: Response): Promise<void> => {
+router.post('/chat', async (req: Request, res: Response) => {
+  const { transactionId, userMessage } = req.body;
+
   try {
-    const { paymentId, message, amount, failureReason } = req.body;
-
-    const customerMessage = message || 'Can you help me complete my payment?';
-
-    // Fetch existing payment failure from DB if paymentId is passed safely
-    let paymentFailure: any = null;
-    if (paymentId) {
-      try {
-        paymentFailure = await prisma.paymentFailure.findUnique({ where: { paymentId } });
-      } catch (dbErr: any) {
-        console.warn('[DB Warning] PaymentFailure fetch skipped:', dbErr.message || dbErr);
-      }
-    }
-
-    const amountInRupees = amount || paymentFailure?.amountInRupees || 2500;
-    const reason = failureReason || paymentFailure?.failureReason || 'PAYMENT_FAILED';
-
-    // Run recovery agent AI
-    const agentResult: any = await recoveryAgentApp.invoke({
-      customerMessage,
-      amountInRupees,
-      failureReason: reason,
-      retryCount: 0,
-      decision: null,
-      validationError: null,
+    const tx = await prisma.transactionFailure.findUnique({
+      where: { id: transactionId },
+      include: { auditLogs: true }
     });
 
-    const rawDecision = agentResult?.decision || {
-      nextAction: 'SEND_LINK',
-      discountBps: 0,
-      promiseDate: null,
-      customerFacingMessage: 'Here is your link to retry the payment.',
-      internalReasoning: 'Fallback response',
-    };
+    if (!tx) {
+      return res.status(404).json({ error: 'Transaction not found' });
+    }
 
-    // Policy Guard & Unit Economics Enforcement
-    const decision = enforcePolicyGuard(rawDecision);
-    const economics = calculateUnitEconomics(amountInRupees, decision.discountBps);
+    // Pass prior context and user message to LangGraph
+    const state = await recoveryAgentApp.invoke({
+      customerMessage: userMessage,
+      amountInRupees: tx.amountInPaisa / 100,
+      failureReason: tx.failureCode,
+      retryCount: tx.retryCount,
+      decision: null,
+      validationError: null
+    });
 
-    // Create payment link if appropriate
-    let dynamicPaymentLink = null;
+    const decision = state.decision!;
+    let paymentLink = null;
+
     if (decision.nextAction === 'SEND_LINK' || decision.nextAction === 'APPLY_DISCOUNT') {
-      dynamicPaymentLink = await createPaymentLink({
-        amountInRupees: economics.netRecoverableAmount,
-        customerEmail: paymentFailure?.customerEmail || undefined,
-        customerContact: paymentFailure?.customerContact || undefined,
-        description: `Objection Recovery (${decision.discountBps} bps discount)`,
+      paymentLink = await createTrackedPaymentLink({
+        amountInRupees: tx.amountInPaisa / 100,
+        discountBps: decision.discountBps,
+        phone: tx.customerPhone,
+        email: tx.customerEmail,
+        orderId: tx.razorpayOrderId
       });
     }
 
-    let sessionRecord: any = null;
-    if (paymentFailure?.id) {
-      try {
-        sessionRecord = await prisma.recoverySession.create({
-          data: {
-            paymentFailureId: paymentFailure.id,
-            customerMessage,
-            nextAction: decision.nextAction,
-            discountBps: decision.discountBps,
-            promiseDate: decision.promiseDate,
-            customerFacingMessage: decision.customerFacingMessage,
-            internalReasoning: decision.internalReasoning,
-          },
-        });
-      } catch (dbErr: any) {
-        console.warn('[DB Warning] RecoverySession create skipped:', dbErr.message || dbErr);
+    // Persist multi-turn updates & P2P promises
+    await prisma.transactionFailure.update({
+      where: { id: tx.id },
+      data: {
+        discountAppliedBps: decision.discountBps,
+        promiseToPayDate: decision.promiseDate ? new Date(decision.promiseDate) : tx.promiseToPayDate,
+        recoveryStatus: decision.nextAction === 'SCHEDULE_P2P' ? 'AWAITING_P2P' : tx.recoveryStatus
       }
-    }
+    });
 
-    res.status(200).json({
-      success: true,
+    await prisma.auditLog.create({
+      data: {
+        transactionFailureId: tx.id,
+        nodeName: 'LANGGRAPH_RECOVERY_AGENT',
+        actionTaken: decision.nextAction,
+        reasoning: `User: "${userMessage}" | Decision: ${decision.internalReasoning} | Response: "${decision.customerFacingMessage}"`,
+        costDelta: 0.10
+      }
+    });
+
+    return res.status(200).json({
       decision,
-      economics,
-      paymentLink: dynamicPaymentLink,
-      savedToDatabase: !!sessionRecord,
-      session: sessionRecord,
+      paymentLink
     });
-  } catch (error: any) {
-    console.error('[Recovery Chat Error]', error);
-    res.status(500).json({
-      success: false,
-      error: error.message || 'Failed to process chat',
-    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
   }
 });
 
-// GET /api/recovery/sessions - List all recovery sessions stored in DB
-router.get('/sessions', async (req: Request, res: Response): Promise<void> => {
-  try {
-    const sessions = await prisma.recoverySession.findMany({
-      include: { paymentFailure: true },
-      orderBy: { createdAt: 'desc' },
-    });
-    res.status(200).json({ success: true, count: sessions.length, sessions });
-  } catch (error: any) {
-    res.status(200).json({ success: false, count: 0, sessions: [], warning: error.message });
-  }
-});
-
-// GET /api/recovery/failures - List all payment failures stored in DB
-router.get('/failures', async (req: Request, res: Response): Promise<void> => {
-  try {
-    const failures = await prisma.paymentFailure.findMany({
-      include: { recoverySessions: true },
-      orderBy: { createdAt: 'desc' },
-    });
-    res.status(200).json({ success: true, count: failures.length, failures });
-  } catch (error: any) {
-    res.status(200).json({ success: false, count: 0, failures: [], warning: error.message });
-  }
+router.get('/transactions', async (_req: Request, res: Response) => {
+  const records = await prisma.transactionFailure.findMany({
+    include: { auditLogs: { orderBy: { createdAt: 'asc' } } },
+    orderBy: { createdAt: 'desc' }
+  });
+  return res.status(200).json(records);
 });
 
 export default router;

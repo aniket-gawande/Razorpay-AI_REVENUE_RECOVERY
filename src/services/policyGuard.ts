@@ -2,10 +2,47 @@ import { AgentDecision } from './agent/schemas';
 
 export const MAX_DISCOUNT_BPS = 500; // 5% maximum discount allowed
 
+export interface ComplianceCheckResult {
+  allowed: boolean;
+  reason: string;
+}
+
+export function checkCompliancePolicies(
+  retryCount: number,
+  maxRetries: number = 3,
+  currentDate: Date = new Date()
+): ComplianceCheckResult {
+  // 1. Max Retry Ceiling Guard
+  if (retryCount >= maxRetries) {
+    return {
+      allowed: false,
+      reason: `Maximum retry ceiling (${maxRetries}) reached. Dunning aborted.`
+    };
+  }
+
+  // 2. TRAI DND Compliance Guard (No messaging between 21:00 and 09:00 IST)
+  // Convert UTC time to IST (UTC + 5:30)
+  const istOffsetMs = 5.5 * 60 * 60 * 1000;
+  const istTime = new Date(currentDate.getTime() + istOffsetMs);
+  const hourIST = istTime.getUTCHours();
+
+  if (hourIST >= 21 || hourIST < 9) {
+    return {
+      allowed: false,
+      reason: `TRAI DND Window active (${hourIST}:00 IST). Messaging restricted between 21:00 and 09:00 IST.`
+    };
+  }
+
+  return {
+    allowed: true,
+    reason: 'Compliance checks passed.'
+  };
+}
+
 export function enforcePolicyGuard(decision: AgentDecision): AgentDecision {
   const sanitized: AgentDecision = { ...decision };
 
-  // Hard clamp discount
+  // Hard clamp discount to maximum 500 bps (5%)
   if (sanitized.discountBps > MAX_DISCOUNT_BPS) {
     sanitized.discountBps = MAX_DISCOUNT_BPS;
     sanitized.internalReasoning += ` [POLICY_GUARD: Discount clamped to maximum ${MAX_DISCOUNT_BPS} bps]`;

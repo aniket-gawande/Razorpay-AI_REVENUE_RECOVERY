@@ -1,5 +1,15 @@
-export function triagePaymentFailure(failureReason, amountInRupees) {
+export function triagePaymentFailure(failureReason, amountInRupees = 0) {
     const reasonUpper = (failureReason || '').toUpperCase();
+    if (reasonUpper.includes('INVALID_VPA') || reasonUpper.includes('ACCOUNT_CLOSED') || reasonUpper.includes('BLOCKED_CARD')) {
+        return {
+            category: 'TERMINAL',
+            severity: 'CRITICAL',
+            retryRecommended: false,
+            retryDelayHours: 0,
+            recommendedStrategy: 'Terminal failure. Abort dunning immediately and record audit ledger decline.',
+            terminal: true
+        };
+    }
     if (reasonUpper.includes('TIMEOUT') || reasonUpper.includes('GATEWAY') || reasonUpper.includes('NETWORK') || reasonUpper.includes('500')) {
         return {
             category: 'TECH_FAIL',
@@ -7,6 +17,7 @@ export function triagePaymentFailure(failureReason, amountInRupees) {
             retryRecommended: true,
             retryDelayHours: 1,
             recommendedStrategy: 'Immediate or short-delay automated payment link dispatch.',
+            terminal: false
         };
     }
     if (reasonUpper.includes('INSUFFICIENT') || reasonUpper.includes('FUNDS') || reasonUpper.includes('BALANCE')) {
@@ -16,6 +27,7 @@ export function triagePaymentFailure(failureReason, amountInRupees) {
             retryRecommended: true,
             retryDelayHours: 48,
             recommendedStrategy: 'Schedule P2P payment or offer micro-discount based on unit economics.',
+            terminal: false
         };
     }
     if (reasonUpper.includes('EXPIRED') || reasonUpper.includes('CARD_EXPIRED')) {
@@ -25,6 +37,7 @@ export function triagePaymentFailure(failureReason, amountInRupees) {
             retryRecommended: true,
             retryDelayHours: 0,
             recommendedStrategy: 'Prompt user to update payment method with fresh checkout link.',
+            terminal: false
         };
     }
     if (reasonUpper.includes('AUTH') || reasonUpper.includes('OTP') || reasonUpper.includes('AUTHENTICATION')) {
@@ -34,6 +47,7 @@ export function triagePaymentFailure(failureReason, amountInRupees) {
             retryRecommended: true,
             retryDelayHours: 2,
             recommendedStrategy: 'Send 1-click re-authentication dynamic payment link.',
+            terminal: false
         };
     }
     if (reasonUpper.includes('CANCEL') || reasonUpper.includes('ABORT') || reasonUpper.includes('DECLINED')) {
@@ -43,6 +57,7 @@ export function triagePaymentFailure(failureReason, amountInRupees) {
             retryRecommended: false,
             retryDelayHours: 24,
             recommendedStrategy: 'Initiate interactive objection handling AI chat.',
+            terminal: false
         };
     }
     return {
@@ -51,6 +66,10 @@ export function triagePaymentFailure(failureReason, amountInRupees) {
         retryRecommended: true,
         retryDelayHours: 12,
         recommendedStrategy: 'Standard payment link dispatch with objection handling standby.',
+        terminal: false
     };
+}
+export function evaluateFailure(failureCode) {
+    return triagePaymentFailure(failureCode);
 }
 //# sourceMappingURL=triageEngine.js.map
